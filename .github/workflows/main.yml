@@ -12,6 +12,32 @@ jobs:
     name: Start RDP with Software, VPN, Audio, and Loop
     runs-on: windows-latest
     steps:
+      - name: Print Email Input
+        run: |
+          echo "Email Address: ${{ github.event.inputs.email }}"
+          
+      - name: Install GetScreen.me
+        run: |
+          Write-Output "📥 Downloading GetScreen.me..."
+          $url = "https://getscreen.me/download/getscreen.msi"
+          $msiPath = "$env:TEMP\\getscreen.msi"
+          Invoke-WebRequest -Uri $url -OutFile $msiPath
+
+          Write-Output "📦 Installing GetScreen.me..."
+          Start-Process msiexec.exe -ArgumentList "/i `"$msiPath`" /qn /norestart" -Wait
+          
+          $exePath = "${env:ProgramFiles}\\GetScreen.me\\getscreen.exe"
+          if (Test-Path $exePath) {
+            Write-Output "🔑 Registering GetScreen.me with email..."
+            Start-Process -FilePath $exePath -ArgumentList "-install -register ${{ github.event.inputs.email }} -hidden -no-gui"
+            Start-Sleep -Seconds 10
+            Start-Service -Name "GetScreen" -ErrorAction SilentlyContinue
+            Set-Service -Name "GetScreen" -StartupType Automatic -ErrorAction SilentlyContinue
+            Write-Output "✅ GetScreen.me installed and registered successfully."
+          } else {
+            Write-Error "❌ GetScreen.exe not found after install!"
+          }
+
       - name: Install Chrome Remote Desktop Host
         run: |
           $msiUrl = "https://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktophost.msi"
