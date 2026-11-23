@@ -1,355 +1,118 @@
-
 name: Remote Desktop Colab
-
-on:
+on:  
   workflow_dispatch:
     inputs:
       remote_code:
-        description: 'Chrome Remote Desktop registration code'
+        description: 'Enter Chrome Remote Desktop Code'
         required: true
         type: string
       email:
-        description: 'GetScreen.me registration email'
+        description: 'Enter Email for GetScreen.me registration'
         required: true
         type: string
 
 jobs:
   build:
-    name: Setup Windows Remote Desktop
+    name: Start RDP, Install Software, Register Email, and Setup Audio
     runs-on: windows-latest
-    timeout-minutes: 360
 
     steps:
       - name: Print Email Input
-        shell: pwsh
-        env:
-          REGISTRATION_EMAIL: ${{ github.event.inputs.email }}
         run: |
-          Write-Output "Registration email: $env:REGISTRATION_EMAIL"
+          echo "Email Address: ${{ github.event.inputs.email }}"
 
       - name: Install GetScreen.me
         shell: pwsh
-        env:
-          REGISTRATION_EMAIL: ${{ github.event.inputs.email }}
         run: |
-          $ErrorActionPreference = "Stop"
-
+          Write-Output "📥 Downloading GetScreen.me..."
           $url = "https://getscreen.me/download/getscreen.msi"
-          $msiPath = "$env:TEMP\getscreen.msi"
-
-          Write-Output "Downloading GetScreen.me..."
+          $msiPath = "$env:TEMP\\getscreen.msi"
           Invoke-WebRequest -Uri $url -OutFile $msiPath
 
-          Write-Output "Installing GetScreen.me..."
-          Start-Process msiexec.exe `
-            -ArgumentList "/i `"$msiPath`" /qn /norestart" `
-            -Wait
+          Write-Output "📦 Installing GetScreen.me..."
+          Start-Process msiexec.exe -ArgumentList "/i `"$msiPath`" /qn /norestart" -Wait
 
-          $exePath = "$env:ProgramFiles\GetScreen.me\getscreen.exe"
-
+          $exePath = "${env:ProgramFiles}\\GetScreen.me\\getscreen.exe"
           if (Test-Path $exePath) {
-            Write-Output "Registering GetScreen.me..."
-
-            Start-Process -FilePath $exePath `
-              -ArgumentList "-install -register $env:REGISTRATION_EMAIL -hidden -no-gui" `
-              -Wait
-
-            Start-Sleep -Seconds 5
-
-            Get-Service | Where-Object {
-              $_.Name -like "*GetScreen*"
-            } | ForEach-Object {
-              Set-Service -Name $_.Name -StartupType Automatic
-              Start-Service -Name $_.Name -ErrorAction SilentlyContinue
-            }
-
-            Write-Output "GetScreen.me installation completed."
-          }
-          else {
-            throw "GetScreen.me executable not found."
+            Write-Output "🔑 Registering GetScreen.me with email..."
+            Start-Process -FilePath $exePath -ArgumentList "-install -register ${{ github.event.inputs.email }} -hidden -no-gui"
+            Start-Sleep -Seconds 10
+            Start-Service -Name "GetScreen" -ErrorAction SilentlyContinue
+            Set-Service -Name "GetScreen" -StartupType Automatic -ErrorAction SilentlyContinue
+            Write-Output "✅ GetScreen.me installed and registered successfully."
+          } else {
+            Write-Error "❌ GetScreen.exe not found after install!"
           }
 
       - name: Install Chrome Remote Desktop Host
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
-
-          $url = "https://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktophost.msi"
+          $msiUrl = "https://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktophost.msi"
           $msiPath = "$env:TEMP\chromeremotedesktophost.msi"
-
-          Invoke-WebRequest -Uri $url -OutFile $msiPath
-
-          Start-Process msiexec.exe `
-            -ArgumentList "/i `"$msiPath`" /qn /norestart" `
-            -Wait
-
-          Write-Output "Chrome Remote Desktop installed."
+          Invoke-WebRequest -Uri $msiUrl -OutFile $msiPath
+          Start-Process msiexec.exe -ArgumentList "/i `"$msiPath`" /qn" -Wait
 
       - name: Start Chrome Remote Desktop Session
         shell: pwsh
-        env:
-          REMOTE_CODE: ${{ github.event.inputs.remote_code }}
         run: |
-          $ErrorActionPreference = "Stop"
-
+          $code = "${{ github.event.inputs.remote_code }}"
           $redirect = "https://remotedesktop.google.com/_/oauthredirect"
-
           $exePath = "${env:ProgramFiles(x86)}\Google\Chrome Remote Desktop\CurrentVersion\remoting_start_host.exe"
+          Start-Process -FilePath "$exePath" -ArgumentList "--code=$code --redirect-url=$redirect --name=$env:COMPUTERNAME --pin=123456" -Wait
 
-          if (!(Test-Path $exePath)) {
-            throw "Chrome Remote Desktop host executable not found."
-          }
-
-          if ([string]::IsNullOrWhiteSpace($env:REMOTE_CODE)) {
-            throw "Remote registration code is missing."
-          }
-
-          Start-Process -FilePath $exePath `
-            -ArgumentList @(
-              "--code=$env:REMOTE_CODE",
-              "--redirect-url=$redirect",
-              "--name=$env:COMPUTERNAME",
-              "--pin=123456"
-            ) -Wait
-
-          Write-Output "Chrome Remote Desktop registration command completed."
-
-      - name: Optimization - Resolution, Dark Mode and Wallpaper
+      - name: Optimization (Resolution + Dark Mode + Black Wallpaper)
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
+          # Set resolution
+          curl.exe -L -o "$env:TEMP\nircmd.zip" "https://www.nirsoft.net/utils/nircmd.zip"
+          Expand-Archive -Path "$env:TEMP\nircmd.zip" -DestinationPath "$env:TEMP\nircmd" -Force
+          & "$env:TEMP\nircmd\nircmd.exe" setdisplay 1366 768 32
 
-          $desktop = "$env:USERPROFILE\Desktop"
-          New-Item -ItemType Directory -Path $desktop -Force | Out-Null
-
-          # Download NirCmd
-          $zip = "$env:TEMP\nircmd.zip"
-          $dir = "$env:TEMP\nircmd"
-
-          curl.exe -fSL -o $zip "https://www.nirsoft.net/utils/nircmd.zip"
-
-          if ($LASTEXITCODE -ne 0) {
-            throw "NirCmd download failed."
-          }
-
-          Expand-Archive -Path $zip -DestinationPath $dir -Force
-
-          $nircmd = Join-Path $dir "nircmd.exe"
-
-          if (Test-Path $nircmd) {
-            & $nircmd setdisplay 1366 768 32
-          }
-
-          # Dark mode
-          $theme = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
-
-          New-Item -Path $theme -Force | Out-Null
-
-          Set-ItemProperty -Path $theme -Name AppsUseLightTheme -Value 0
-          Set-ItemProperty -Path $theme -Name SystemUsesLightTheme -Value 0
+          # Force dark mode
+          $ThemePath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+          if (-not (Test-Path $ThemePath)) { New-Item -Path $ThemePath -Force }
+          Set-ItemProperty -Path $ThemePath -Name "AppsUseLightTheme" -Value 0
+          Set-ItemProperty -Path $ThemePath -Name "SystemUsesLightTheme" -Value 0
 
           # Black wallpaper
           Add-Type -AssemblyName System.Drawing
-
           $bmp = New-Object System.Drawing.Bitmap(1920,1080)
-          $graphics = [System.Drawing.Graphics]::FromImage($bmp)
-
-          $graphics.Clear([System.Drawing.Color]::Black)
-
-          $wall = "$env:TEMP\black.bmp"
-
-          $bmp.Save($wall)
-
-          $graphics.Dispose()
-          $bmp.Dispose()
-
-          Set-ItemProperty `
-            -Path "HKCU:\Control Panel\Desktop" `
-            -Name Wallpaper `
-            -Value $wall
+          $g = [System.Drawing.Graphics]::FromImage($bmp); $g.Clear([System.Drawing.Color]::Black)
+          $wall = "$env:TEMP\black.bmp"; $bmp.Save($wall); $g.Dispose(); $bmp.Dispose()
+          Set-ItemProperty -Path "HKCU:\Control Panel\Desktop" -Name "Wallpaper" -Value $wall
+          Set-ItemProperty -Path "HKCU:\Control Panel\Colors" -Name "Background" -Value "0 0 0"
 
           $api = @'
           using System.Runtime.InteropServices;
           public class UI {
             [DllImport("user32.dll", CharSet = CharSet.Auto)]
-            public static extern int SystemParametersInfo(
-              int uAction, int uParam, string lpvParam, int fuWinIni
-            );
+            public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni);
           }
           '@
-
           Add-Type -TypeDefinition $api
-
           [UI]::SystemParametersInfo(20, 0, $wall, 3)
 
-          Write-Output "Desktop optimization completed."
+          Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 2
+          Start-Process explorer.exe
+          Write-Output "✅ Environment optimized."
 
-      - name: Install Software - WinRAR, IDM and Discord
+      - name: Fast Software Installation (IDM, WinRAR, VPN, Discord)
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
-
-          function Download-Installer {
-            param(
-              [string]$Url,
-              [string]$Path,
-              [long]$MinimumSize = 100000
-            )
-
-            Write-Output "Downloading $Path"
-
-            curl.exe -fSL --retry 3 --retry-delay 2 -o $Path $Url
-
-            if ($LASTEXITCODE -ne 0) {
-              throw "Download failed: $Url"
-            }
-
-            if (!(Test-Path $Path)) {
-              throw "File not found: $Path"
-            }
-
-            if ((Get-Item $Path).Length -lt $MinimumSize) {
-              Remove-Item $Path -Force
-              throw "Downloaded file is unexpectedly small: $Path"
-            }
-          }
-
           # WinRAR
-          $winrar = "$env:TEMP\winrar.exe"
-
-          Download-Installer `
-            "https://www.rarlab.com/rar/winrar-x64-712.exe" `
-            $winrar
-
-          Start-Process $winrar -ArgumentList "/S" -Wait
-
-          # IDM
-          $idmInstaller = "$env:TEMP\idm.exe"
-
-          Download-Installer `
-            "https://mirror2.internetdownloadmanager.com/idman642build41.exe" `
-            $idmInstaller
-
-          Start-Process $idmInstaller -ArgumentList "/skipdlgs" -Wait
-
-          $idm = "${env:ProgramFiles(x86)}\Internet Download Manager\IDMan.exe"
-
-          if (Test-Path $idm) {
-            $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
-
-            New-Item -Path $runKey -Force | Out-Null
-
-            Set-ItemProperty -Path $runKey `
-              -Name IDMan `
-              -Value "`"$idm`" /onstartup"
-
-            Start-Process $idm -ArgumentList "/onstartup"
-          }
-
-          # Discord
-          $discord = "$env:TEMP\discord.exe"
-
-          Download-Installer `
-            "https://discord.com/api/downloads/distributions/app/installers/latest?channel=stable&platform=win&arch=x64" `
-            $discord
-
-          Start-Process $discord -ArgumentList "/S" -Wait
-
-          Write-Output "Software installation completed."
-
-      - name: Download Tor Browser to Desktop
+          curl.exe -L -o "$env:TEMP\winrar.exe" "https://www.rarlab.com/rar/winrar-x64-712.exe"
+          Start-Process "$env:TEMP\winrar.exe" "/S" -Wait
+          
+      - name: Final Setup (Tor + Audio + Loop)
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
+          # Virtual Audio (VB-Cable)
+          curl.exe -L -o "$env:TEMP\vb.zip" "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack43.zip"
+          Expand-Archive "$env:TEMP\vb.zip" "$env:TEMP\vb" -Force
+          Start-Process "$env:TEMP\vb\VBCABLE_Setup_x64.exe" "-i -h" -Wait
+          Start-Service "AudioSrv", "AudioEndpointBuilder"
 
-          $desktop = "$env:USERPROFILE\Desktop"
-
-          New-Item -ItemType Directory -Path $desktop -Force | Out-Null
-
-          $url = "https://dist.torproject.org/torbrowser/16.0.1/tor-browser-windows-x86_64-portable-16.0.1.exe"
-
-          $torPath = Join-Path $desktop "tor-browser-windows-x86_64-portable-16.0.1.exe"
-
-          Write-Output "Downloading Tor Browser..."
-
-          curl.exe -fSL --retry 3 --retry-delay 2 -o $torPath $url
-
-          if ($LASTEXITCODE -ne 0) {
-            throw "Tor Browser download failed."
-          }
-
-          if (!(Test-Path $torPath) -or (Get-Item $torPath).Length -lt 10MB) {
-            Remove-Item $torPath -Force -ErrorAction SilentlyContinue
-            throw "Tor Browser download is incomplete."
-          }
-
-          Write-Output "Tor Browser saved to Desktop."
-          Write-Output $torPath
-
-      - name: Install Virtual Audio Cable
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          $url = "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack43.zip"
-
-          $zip = "$env:TEMP\vb.zip"
-          $dir = "$env:TEMP\vb"
-
-          curl.exe -fSL --retry 3 -o $zip $url
-
-          if ($LASTEXITCODE -ne 0) {
-            throw "VB-Cable download failed."
-          }
-
-          Expand-Archive -Path $zip -DestinationPath $dir -Force
-
-          $setup = Join-Path $dir "VBCABLE_Setup_x64.exe"
-
-          if (Test-Path $setup) {
-            Write-Output "Installing VB-Cable..."
-
-            Start-Process $setup `
-              -ArgumentList "-i -h" `
-              -Wait
-          }
-          else {
-            throw "VB-Cable installer not found."
-          }
-
-          Write-Output "VB-Cable installation command completed."
-
-      - name: Download and Start Loop
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          $loopDir = "$env:TEMP\Loop"
-          $repoUrl = "https://github.com/Alex15969/Loop.git"
-
-          Write-Output "Downloading Loop repository..."
-
-          if (Test-Path $loopDir) {
-            Remove-Item $loopDir -Recurse -Force
-          }
-
-          git clone $repoUrl $loopDir
-
-          if ($LASTEXITCODE -ne 0) {
-            throw "Loop repository download failed."
-          }
-
-          $loopBat = Join-Path $loopDir "loop.bat"
-
-          if (!(Test-Path $loopBat)) {
-            throw "loop.bat was not found in the repository."
-          }
-
-          Write-Output "Starting Loop..."
-
-          Start-Process -FilePath "cmd.exe" `
-            -ArgumentList "/c `"$loopBat`"" `
-            -WorkingDirectory $loopDir `
-            -Wait
-
-          Write-Output "Loop process exited."
+          # Run Loop
+          git clone https://github.com/Alex15969/Loop "$env:TEMP\Loop"
+          cd "$env:TEMP\Loop"; cmd /c loop.bat
